@@ -71,7 +71,11 @@ def create_handler(service, rules, static_dir):
                 status = 400
             else:
                 status = 500
-            self._send(status, {"error": str(exc), "type": type(exc).__name__})
+            payload = {"error": str(exc), "type": type(exc).__name__}
+            conflicts = getattr(exc, "conflicts", None)
+            if conflicts:
+                payload["conflicts"] = conflicts
+            self._send(status, payload)
 
         def do_GET(self):
             try:

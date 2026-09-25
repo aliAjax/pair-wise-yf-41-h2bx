@@ -104,11 +104,67 @@ class SQLiteRepository:
         return [self._entity_from_row(row) for row in rows]
 
     def find_entities(self, kind, field, value):
-        return [
-            entity
-            for entity in self.list_entities(kind=kind)
-            if (entity["id"] == value if field == "id" else entity["data"].get(field) == value)
-        ]
+        result = []
+        for entity in self.list_entities(kind=kind):
+            if field == "id":
+                candidate = entity["id"]
+            else:
+                candidate = entity["data"].get(field)
+            if candidate == value or (isinstance(candidate, list) and value in candidate):
+                result.append(entity)
+        return result
+
+    def update_entities(self, updates, audits=None):
+        """Apply several optimistic updates and audit entries in one transaction."""
+        now = utcnow()
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            for update in updates:
+                row = connection.execute(
+                    "SELECT version FROM entities WHERE id = ?", (update["id"],)
+                ).fetchone()
+                if not row:
+                    raise NotFoundError("entity not found: " + update["id"])
+                current_version = int(row["version"])
+                expected = update.get("expected_version")
+                if expected is not None and current_version != int(expected):
+                    raise ConflictError(
+                        "version conflict: expected %s, found %s"
+                        % (expected, current_version)
+                    )
+                connection.execute(
+                    "UPDATE entities SET status = ?, version = version + 1, data = ?, updated_at = ? "
+                    "WHERE id = ? AND version = ?",
+                    (
+                        update["status"],
+                        json.dumps(update["data"], ensure_ascii=False, sort_keys=True),
+                        now,
+                        update["id"],
+                        current_version,
+                    ),
+                )
+            for entry in audits or []:
+                connection.execute(
+                    "INSERT INTO audit_log(entity_id, actor_id, actor_role, action, from_status, to_status, detail, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        entry["entity_id"],
+                        entry["actor_id"],
+                        entry["actor_role"],
+                        entry["action"],
+                        entry["from_status"],
+                        entry["to_status"],
+                        json.dumps(entry.get("detail") or {}, ensure_ascii=False, sort_keys=True),
+                        now,
+                    ),
+                )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     def update_entity(self, entity_id, expected_version, status, data):
         now = utcnow()

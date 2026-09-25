@@ -27,6 +27,17 @@ class InvalidTransition(DomainError):
     """The requested state transition is not valid."""
 
 
+class MergeConflictError(ConflictError):
+    """Merge precheck failed; carries conflicting event ids and current versions."""
+
+    def __init__(self, conflicts):
+        self.conflicts = list(conflicts)
+        summary = ", ".join(
+            "%s(%s)" % (item.get("event_id"), item.get("reason")) for item in self.conflicts
+        )
+        super().__init__("merge precheck failed: " + summary)
+
+
 class Role(str, Enum):
     viewer = "viewer"
     admin = "admin"
